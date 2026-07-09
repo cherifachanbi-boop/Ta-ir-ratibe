@@ -18,6 +18,8 @@ import {
   Save,
   ChevronDown,
   ChevronUp,
+  Rocket,
+  ListChecks,
 } from "lucide-react";
 
 const fmt = (n) => {
@@ -44,6 +46,20 @@ const nextId = () => uid++;
 
 const STORAGE_KEY = "salary-ledger-data-v1";
 
+const PROJECT_TYPES = ["عمرة", "حج", "بناء", "زواج", "أخرى"];
+
+const FAMILY_NEED_CATEGORIES = [
+  "احتياجات غذائية",
+  "خضر",
+  "لحوم",
+  "فاتورة الغاز",
+  "فاتورة الكهرباء",
+  "فاتورة الماء",
+  "فاتورة الانترنت",
+  "التنقل",
+  "احتياجات الملابس",
+];
+
 const defaultState = () => ({
   salary: 111000,
   mother: 10000,
@@ -68,6 +84,20 @@ const defaultState = () => ({
       payments: [],
     },
   ],
+  projects: [
+    {
+      id: nextId(),
+      name: "",
+      type: PROJECT_TYPES[0],
+      totalAmount: 0,
+      monthly: 0,
+      saved: 0,
+      payments: [],
+    },
+  ],
+  familyNeeds: [
+    { id: nextId(), category: FAMILY_NEED_CATEGORIES[0], amount: 0 },
+  ],
   rows: [
     { id: nextId(), label: "مصاريف الأسرة", percent: 58.6 },
     { id: nextId(), label: "القسط الشهري", percent: 11.4 },
@@ -88,6 +118,8 @@ function loadInitialState() {
     const allIds = [
       ...(parsed.installments || []).map((i) => i.id),
       ...(parsed.debts || []).map((d) => d.id),
+      ...(parsed.projects || []).map((p) => p.id),
+      ...(parsed.familyNeeds || []).map((f) => f.id),
       ...(parsed.rows || []).map((r) => r.id),
       ...(parsed.monthlyReports || []).map((m) => m.id),
     ].filter((n) => typeof n === "number");
@@ -109,6 +141,10 @@ export default function SalaryLedger() {
 
   const [debts, setDebts] = useState(initial.current.debts);
 
+  const [projects, setProjects] = useState(initial.current.projects);
+
+  const [familyNeeds, setFamilyNeeds] = useState(initial.current.familyNeeds);
+
   const [rows, setRows] = useState(initial.current.rows);
 
   const [monthlyReports, setMonthlyReports] = useState(initial.current.monthlyReports);
@@ -119,13 +155,13 @@ export default function SalaryLedger() {
 
   // حفظ تلقائي في التخزين المحلي للجهاز عند أي تغيير
   useEffect(() => {
-    const data = { salary, mother, alimony, installments, debts, rows, monthlyReports };
+    const data = { salary, mother, alimony, installments, debts, projects, familyNeeds, rows, monthlyReports };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch {
       // تجاهل أخطاء التخزين (مثلاً في وضع التصفح الخاص)
     }
-  }, [salary, mother, alimony, installments, debts, rows, monthlyReports]);
+  }, [salary, mother, alimony, installments, debts, projects, familyNeeds, rows, monthlyReports]);
 
   const installmentsTotal = useMemo(
     () => installments.reduce((s, i) => s + (Number(i.monthly) || 0), 0),
@@ -136,7 +172,28 @@ export default function SalaryLedger() {
     [debts]
   );
 
-  const totalFixed = mother + alimony + installmentsTotal + debtsMonthlyTotal;
+  const projectsMonthlyTotal = useMemo(
+    () => projects.reduce((s, p) => s + (Number(p.monthly) || 0), 0),
+    [projects]
+  );
+  const projectsSavedTotal = useMemo(
+    () => projects.reduce((s, p) => s + (Number(p.saved) || 0), 0),
+    [projects]
+  );
+  const projectsTargetTotal = useMemo(
+    () => projects.reduce((s, p) => s + (Number(p.totalAmount) || 0), 0),
+    [projects]
+  );
+  const projectsRemainingTotal = useMemo(
+    () =>
+      projects.reduce(
+        (s, p) => s + Math.max((Number(p.totalAmount) || 0) - (Number(p.saved) || 0), 0),
+        0
+      ),
+    [projects]
+  );
+
+  const totalFixed = mother + alimony + installmentsTotal + debtsMonthlyTotal + projectsMonthlyTotal;
   const remaining = salary - totalFixed;
 
   const installmentsRemainingTotal = useMemo(
@@ -161,6 +218,26 @@ export default function SalaryLedger() {
     (s, r) => s + (salary * (Number(r.percent) || 0)) / 100,
     0
   );
+
+  // مجموع بنود الادخار/الطوارئ داخل جدول النسب + الادخار الشهري للمشاريع المستقبلية
+  const savingsRowsTotal = useMemo(
+    () =>
+      rows.reduce((s, r) => {
+        const isSavingRow = /ادخار|طوارئ|احتياط/.test(r.label || "");
+        return isSavingRow ? s + (salary * (Number(r.percent) || 0)) / 100 : s;
+      }, 0),
+    [rows, salary]
+  );
+  const combinedSavingsTotal = savingsRowsTotal + projectsMonthlyTotal;
+
+  // ربط بند "مصاريف الأسرة" في جدول النسب بتفصيل الاحتياجات الأسرية
+  const familyRow = rows.find((r) => (r.label || "").includes("الأسرة"));
+  const familyBudget = familyRow ? (salary * (Number(familyRow.percent) || 0)) / 100 : 0;
+  const familyNeedsTotal = useMemo(
+    () => familyNeeds.reduce((s, f) => s + (Number(f.amount) || 0), 0),
+    [familyNeeds]
+  );
+  const familyNeedsRemaining = familyBudget - familyNeedsTotal;
 
   const updateInstallment = (id, field, value) =>
     setInstallments((list) =>
@@ -228,6 +305,61 @@ export default function SalaryLedger() {
       })
     );
 
+  const updateProject = (id, field, value) =>
+    setProjects((list) =>
+      list.map((p) => (p.id === id ? { ...p, [field]: value } : p))
+    );
+  const addProject = () =>
+    setProjects((l) => [
+      ...l,
+      {
+        id: nextId(),
+        name: "",
+        type: PROJECT_TYPES[0],
+        totalAmount: 0,
+        monthly: 0,
+        saved: 0,
+        payments: [],
+      },
+    ]);
+  const removeProject = (id) => setProjects((l) => l.filter((p) => p.id !== id));
+
+  const payProject = (id) =>
+    setProjects((list) =>
+      list.map((p) => {
+        if (p.id !== id) return p;
+        const target = Number(p.totalAmount) || 0;
+        const already = Number(p.saved) || 0;
+        if (target > 0 && already >= target) return p;
+        const amount =
+          target > 0 ? Math.min(Number(p.monthly) || 0, target - already) : Number(p.monthly) || 0;
+        if (amount <= 0) return p;
+        const payments = [...(p.payments || []), { date: todayISO(), amount }];
+        return { ...p, saved: already + amount, payments };
+      })
+    );
+  const undoProjectPayment = (id) =>
+    setProjects((list) =>
+      list.map((p) => {
+        if (p.id !== id || !(p.payments || []).length) return p;
+        const last = p.payments[p.payments.length - 1];
+        const payments = p.payments.slice(0, -1);
+        return { ...p, saved: (Number(p.saved) || 0) - last.amount, payments };
+      })
+    );
+
+  const updateFamilyNeed = (id, field, value) =>
+    setFamilyNeeds((list) =>
+      list.map((f) => (f.id === id ? { ...f, [field]: value } : f))
+    );
+  const addFamilyNeed = () =>
+    setFamilyNeeds((l) => [
+      ...l,
+      { id: nextId(), category: FAMILY_NEED_CATEGORIES[0], amount: 0 },
+    ]);
+  const removeFamilyNeed = (id) =>
+    setFamilyNeeds((l) => l.filter((f) => f.id !== id));
+
   const updateRow = (id, value) =>
     setRows((list) =>
       list.map((r) => (r.id === id ? { ...r, percent: value } : r))
@@ -237,7 +369,7 @@ export default function SalaryLedger() {
 
   // نسخة احتياطية للبيانات
   const exportBackup = () => {
-    const data = { salary, mother, alimony, installments, debts, rows, monthlyReports };
+    const data = { salary, mother, alimony, installments, debts, projects, familyNeeds, rows, monthlyReports };
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: "application/json",
     });
@@ -265,6 +397,8 @@ export default function SalaryLedger() {
         if (typeof parsed.alimony === "number") setAlimony(parsed.alimony);
         if (Array.isArray(parsed.installments)) setInstallments(parsed.installments);
         if (Array.isArray(parsed.debts)) setDebts(parsed.debts);
+        if (Array.isArray(parsed.projects)) setProjects(parsed.projects);
+        if (Array.isArray(parsed.familyNeeds)) setFamilyNeeds(parsed.familyNeeds);
         if (Array.isArray(parsed.rows)) setRows(parsed.rows);
         if (Array.isArray(parsed.monthlyReports)) setMonthlyReports(parsed.monthlyReports);
         window.alert("تم استرجاع النسخة الاحتياطية بنجاح.");
@@ -290,6 +424,9 @@ export default function SalaryLedger() {
       alimony,
       installmentsTotal,
       debtsMonthlyTotal,
+      projectsMonthlyTotal,
+      projectsRemainingTotal,
+      combinedSavingsTotal,
       totalFixed,
       remaining,
       installmentsRemainingTotal,
@@ -455,6 +592,36 @@ export default function SalaryLedger() {
           border-color: var(--emerald);
           background: #fff;
         }
+        select.f-select {
+          appearance: none;
+          -webkit-appearance: none;
+          background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667066' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");
+          background-repeat: no-repeat;
+          background-position: left 10px center;
+          background-size: 16px;
+          padding-left: 30px;
+          cursor: pointer;
+        }
+        select.f-select:focus {
+          outline: none;
+          border-color: var(--emerald);
+          background-color: #fff;
+        }
+
+        .progress-bar {
+          margin-top: 10px;
+          height: 8px;
+          border-radius: 999px;
+          background: #E7ECE0;
+          overflow: hidden;
+        }
+        .progress-fill {
+          height: 100%;
+          background: var(--emerald);
+          border-radius: 999px;
+          transition: width 0.3s ease;
+        }
+        .savings-summary { margin-top: 12px; }
 
         .fixed-simple {
           display: flex;
@@ -990,6 +1157,135 @@ export default function SalaryLedger() {
           })}
         </div>
 
+        {/* Future projects / savings goals */}
+        <div className="section">
+          <div className="section-head">
+            <Rocket size={18} />
+            <h2>المشاريع المستقبلية</h2>
+          </div>
+
+          <div className="list-title-row">
+            <div className="who">
+              <Rocket size={16} color="#0F5C46" />
+              مشاريع الادخار (عمرة، حج، بناء...)
+            </div>
+            <button className="add-btn" onClick={addProject}>
+              <Plus size={14} /> إضافة مشروع
+            </button>
+          </div>
+
+          {projects.map((p) => {
+            const target = Number(p.totalAmount) || 0;
+            const saved = Number(p.saved) || 0;
+            const remainingProject = Math.max(target - saved, 0);
+            const progress = target > 0 ? Math.min((saved / target) * 100, 100) : 0;
+            return (
+              <div className="card accent-emerald" key={p.id}>
+                <div className="row-3">
+                  <div>
+                    <label className="f-label">اسم المشروع</label>
+                    <input
+                      className="f-text"
+                      type="text"
+                      placeholder="مثال: عمرة العائلة"
+                      value={p.name}
+                      onChange={(e) => updateProject(p.id, "name", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="f-label">نوع المشروع</label>
+                    <select
+                      className="f-input f-select"
+                      value={p.type}
+                      onChange={(e) => updateProject(p.id, "type", e.target.value)}
+                    >
+                      {PROJECT_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                    <button className="remove-btn" onClick={() => removeProject(p.id)} title="حذف">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="row-2" style={{ marginTop: 10 }}>
+                  <div>
+                    <label className="f-label">المبلغ الإجمالي للمشروع (دج)</label>
+                    <input
+                      className="f-input tab-num"
+                      type="number"
+                      value={p.totalAmount}
+                      onChange={(e) => updateProject(p.id, "totalAmount", Number(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <label className="f-label">دفعة الادخار الشهرية (دج)</label>
+                    <input
+                      className="f-input tab-num"
+                      type="number"
+                      value={p.monthly}
+                      onChange={(e) => updateProject(p.id, "monthly", Number(e.target.value) || 0)}
+                    />
+                  </div>
+                </div>
+                {target > 0 && (
+                  <div className="progress-bar">
+                    <div className="progress-fill" style={{ width: `${progress}%` }} />
+                  </div>
+                )}
+                <div className="entity-remaining">
+                  <span>
+                    المدَّخر حتى الآن: <b className="tab-num">{fmt(saved)} دج</b>
+                  </span>
+                  <span>
+                    المتبقي للوصول للهدف: <b className="tab-num">{fmt(remainingProject)} دج</b>
+                  </span>
+                  <span>
+                    دفعات مسجَّلة: <b className="tab-num">{(p.payments || []).length}</b>
+                  </span>
+                </div>
+                <div className="pay-actions">
+                  <button
+                    className="pay-btn"
+                    onClick={() => payProject(p.id)}
+                    disabled={(target > 0 && remainingProject <= 0) || !(Number(p.monthly) > 0)}
+                  >
+                    <CheckCircle2 size={14} /> تسجيل دفعة ادخار هذا الشهر
+                  </button>
+                  {(p.payments || []).length > 0 && (
+                    <button className="link-btn" onClick={() => undoProjectPayment(p.id)}>
+                      تراجع عن آخر دفعة
+                    </button>
+                  )}
+                  {(p.payments || []).length > 0 && (
+                    <button
+                      className="link-btn"
+                      onClick={() => setOpenHistoryId(openHistoryId === `p-${p.id}` ? null : `p-${p.id}`)}
+                    >
+                      {openHistoryId === `p-${p.id}` ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                      سجل الدفعات
+                    </button>
+                  )}
+                </div>
+                {openHistoryId === `p-${p.id}` && (p.payments || []).length > 0 && (
+                  <ul className="pay-history">
+                    {p.payments.slice().reverse().map((pay, idx) => (
+                      <li key={idx}>
+                        <span>{pay.date}</span>
+                        <span className="tab-num">{fmt(pay.amount)} دج</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
         {/* Percentage plan table */}
         <div className="section">
           <div className="section-head">
@@ -1038,6 +1334,91 @@ export default function SalaryLedger() {
               </tr>
             </tfoot>
           </table>
+
+          <div className="card accent-emerald savings-summary">
+            <div className="fixed-simple">
+              <div className="who">
+                <PiggyBank size={16} color="#0F5C46" />
+                مجموع الادخار الشهري (الطوارئ + الاحتياطي + المشاريع المستقبلية)
+              </div>
+              <div className="stat-value tab-num pos">{fmt(combinedSavingsTotal)} دج</div>
+            </div>
+            <div className="backup-hint">
+              يشمل بنود "ادخار للطوارئ" و"احتياطي للمصاريف غير المتوقعة" من جدول النسب أعلاه، بالإضافة إلى دفعات الادخار الشهرية لكل المشاريع المستقبلية ({fmt(projectsMonthlyTotal)} دج).
+            </div>
+          </div>
+        </div>
+
+        {/* Family needs breakdown, tied to "مصاريف الأسرة" row */}
+        <div className="section">
+          <div className="section-head">
+            <ListChecks size={18} />
+            <h2>تفصيل احتياجات الأسرة</h2>
+          </div>
+
+          <div className="list-title-row">
+            <div className="who">
+              <ListChecks size={16} color="#0F5C46" />
+              بنود مصاريف الأسرة
+            </div>
+            <button className="add-btn" onClick={addFamilyNeed}>
+              <Plus size={14} /> إضافة بند
+            </button>
+          </div>
+
+          {familyNeeds.map((f) => (
+            <div className="card" key={f.id}>
+              <div className="row-3">
+                <div>
+                  <label className="f-label">البند</label>
+                  <select
+                    className="f-input f-select"
+                    value={f.category}
+                    onChange={(e) => updateFamilyNeed(f.id, "category", e.target.value)}
+                  >
+                    {FAMILY_NEED_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="f-label">المبلغ (دج)</label>
+                  <input
+                    className="f-input tab-num"
+                    type="number"
+                    value={f.amount}
+                    onChange={(e) => updateFamilyNeed(f.id, "amount", Number(e.target.value) || 0)}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                  <button className="remove-btn" onClick={() => removeFamilyNeed(f.id)} title="حذف">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <div className={`card ${familyNeedsRemaining >= 0 ? "accent-emerald" : "accent-brick"}`}>
+            <div className="divider-strip" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+              <div className="stat">
+                <div className="stat-label">ميزانية "مصاريف الأسرة" (من جدول النسب)</div>
+                <div className="stat-value tab-num">{fmt(familyBudget)} دج</div>
+              </div>
+              <div className="stat">
+                <div className="stat-label">مجموع البنود المُدخلة</div>
+                <div className="stat-value tab-num">{fmt(familyNeedsTotal)} دج</div>
+              </div>
+              <div className="stat">
+                <div className="stat-label">{familyNeedsRemaining >= 0 ? "المتبقي من الميزانية" : "تجاوز الميزانية"}</div>
+                <div className={`stat-value tab-num ${familyNeedsRemaining >= 0 ? "pos" : "neg"}`}>
+                  {fmt(Math.abs(familyNeedsRemaining))} دج
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Monthly financial report */}
